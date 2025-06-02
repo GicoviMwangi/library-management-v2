@@ -19,4 +19,5 @@ public interface BookRequestRepository extends JpaRepository<BookRequest,Long> {
             RequestStatus requestStatus,
             LocalDateTime date
     );
+    List<BookRequest> findByUser_Id(Long id);
 }
