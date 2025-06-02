@@ -30,44 +30,50 @@ public class BookRequestService {
     private final LibraryUserRepository libraryUserRepository;
 
 
-    public BookRequest submitRequest(Long userId) {
-        Users user = userRepository.findById(userId)
-                .orElseThrow(() -> new UsernameNotFoundException("USER NOT FOUND"));
+    public BookRequestDTO submitRequest(Long userId) {
+        Users user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("user not found "+userId+"."));
 
-        BookRequest request = bookRequestRepository.findByUserAndStatus(user, RequestStatus.PENDING)
-                .orElseThrow(() -> new RuntimeException("No pending request found"));
+        BookRequest request = bookRequestRepository.findByUserAndStatus(user,RequestStatus.PENDING).orElseThrow(() -> new RuntimeException("No pending request to submit for user " + userId));;
 
-        for (Book book : request.getBookSet()) {
-            Book dbBook = booksRepository.findById(book.getBookId()).orElseThrow(() -> new UsernameNotFoundException("BOOK NOT AVAILABLE"));
+        //checks the number of books issued to the user
+        if (request.getBookSet().size() >= 3) throw new RuntimeException("REACHED MAXIMUM AMOUNT OF BOOKS ISSUED.");
 
-            if (request.getBookSet().size() > 2) throw new RuntimeException("MAX AMOUNT OF BOOKS ISSUED TO USER " + user.getUsername());
+        for (Book bookSet:request.getBookSet()){
+            //check if the books' id valid in the db
+            Book dbBook = booksRepository.findById(bookSet.getBookId()).orElseThrow(() -> new RuntimeException("BOOK ID IS NOT VALID "+bookSet.getBookId()+"."));
 
+            //check if there are available copies of the books
             if (dbBook.getQuantity() <= 0) {
-                request.setStatus(RequestStatus.REJECTED);
-                bookRequestRepository.save(request);
-                throw new UsernameNotFoundException("BOOK " + dbBook.getBookName() + " IS NOT AVAILABLE");
+                //rejects the requests
+               request.setStatus(RequestStatus.REJECTED);
+               bookRequestRepository.save(request);
+               throw new RuntimeException("Book out of stock: " + dbBook.getBookName());
             }
         }
 
-        String serialNumber = generateSerialNumber();
+        String serialNumber  = generateSerialNumber();
 
+        //decrements the quantity of books in the db and saves the new quantity
         request.getBookSet().forEach(book -> {
-            Book dbBook = booksRepository.findById(book.getBookId()).get();
-            dbBook.setQuantity(dbBook.getQuantity() -1);
-            booksRepository.save(dbBook);
-        });
+            Book bookDb = booksRepository.findById(book.getBookId()).orElseThrow();
+            bookDb.setQuantity(bookDb.getQuantity()-1);
+            booksRepository.save(bookDb);
+                }
+        );
+
 
         request.setStatus(RequestStatus.APPROVED);
         request.setSerialNumber(serialNumber);
         request.setApprovalDate(LocalDateTime.now());
-        BookRequest savedRequest = bookRequestRepository.save(request);
 
-
-        return savedRequest;
+         BookRequest approvedRequest = bookRequestRepository.save(request);
+         return convertToDTO(approvedRequest);
     }
-
-    public List<BookRequest> getUserRequest (Long userId){
-        return bookRequestRepository.findAll();
+    
+    //return all requests of the specified user
+    public List<BookRequestDTO> getUserRequest (Long userId){
+        List<BookRequest> bookRequest = bookRequestRepository.findByUser_Id(userId);
+        return bookRequest.stream().map(this::convertToDTO).toList();
     }
 
     private String generateSerialNumber(){
@@ -75,11 +81,11 @@ public class BookRequestService {
                 "-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase();
     }
 
-    public BookRequest addToCart(Long userId, Long bookId) {
-        Users user = libraryUserRepository.findById(userId).orElseThrow(() -> new RuntimeException("USER NOT FOUND"));
-//        UserDTO userDTO = convertToDto(user);
+    public BookRequestDTO addToCart(Long userId, Long bookId) {
+        Users user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("USER NOT FOUND"));
 
         Book book = booksRepository.findById(bookId).orElseThrow(()-> new RuntimeException("404, BOOK NOT FOUND"));
+
 
         BookRequest request = bookRequestRepository.findByUserAndStatus(user,RequestStatus.PENDING).orElseGet(() -> {
             BookRequest newRequest = new BookRequest();
@@ -89,14 +95,27 @@ public class BookRequestService {
             return bookRequestRepository.save(newRequest);
         });
 
+        if (request.getBookSet().size() >= 3) {
+            throw new RuntimeException("Cannot add more than 3 books to cart.");
+        }
+
         if (!request.getBookSet().contains(book)){
             request.getBookSet().add(book);
-            return bookRequestRepository.save(request);
+            bookRequestRepository.save(request);
+            return convertToDTO(request);
         }
-        return request;
+        return convertToDTO(request);
     }
 
-
+    BookRequestDTO convertToDTO(BookRequest bookRequest){
+        Set<BookDTO> brDTO = bookRequest.getBookSet().stream().map(book -> new BookDTO(book.getBookId(),book.getBookName(),book.getCategory(),book.getLevel())).collect(Collectors.toSet());
+        return new BookRequestDTO(
+                bookRequest.getId(),
+                bookRequest.getUser().getUserId(),
+                brDTO,
+                bookRequest.getStatus()
+        );
+    }
 
 }
 
